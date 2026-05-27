@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Format check
+        run: npx prettier --check .
+
+      - name: Type check
+        run: npx tsc --noEmit
+
+      - name: Test + coverage
+        run: npx vitest run --coverage
+        env:
+          RAWG_API_KEY: ${{ secrets.RAWG_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+          UPSTASH_REDIS_REST_URL: ${{ secrets.UPSTASH_REDIS_REST_URL }}
+          UPSTASH_REDIS_REST_TOKEN: ${{ secrets.UPSTASH_REDIS_REST_TOKEN }}
+          ITAD_API_KEY: ${{ secrets.ITAD_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+
+      - name:
+          Assert no server secrets in client bundle
+          # Scans client component files in src/app/ to ensure server keys are never leaked to the browser
+        run: |
+          grep -r "SUPABASE_SECRET_KEY\|GEMINI_API_KEY\|RAWG_API_KEY\|ITAD_API_KEY" src/app --include="*.tsx" --include="*.ts" | grep -v "env.ts" && echo "FAIL: server secret found in client code" && exit 1 || echo "OK"
+
+      - name: Build
+        run: npm run build

@@ -1,36 +1,88 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Should I Buy This Game?
 
-## Getting Started
+An AI-powered verdict tool for video games. Search for any game and get a **buy / wait / skip** recommendation backed by real-time pricing, Metacritic scores, and community sentiment — no fluff, just a verdict.
 
-First, run the development server:
+## How it works
+
+1. Search for a game — autocomplete pulls from the RAWG database
+2. The app fetches the current best price across stores (via IsThereAnyDeal) and the Metacritic score
+3. Google Gemini analyses pricing history, critic scores, and web sentiment to produce a verdict with reasons
+4. Results are cached in Supabase for 7 days so repeat lookups are instant
+
+## Stack
+
+- **Next.js 16** (App Router, TypeScript, ISR)
+- **Google Gemini** — primary AI verdict engine, falls back through multiple models on quota exhaustion
+- **Groq** — final fallback when all Gemini quota is exhausted
+- **RAWG** — game metadata and search
+- **IsThereAnyDeal (ITAD)** — real-time pricing across Steam, Humble, Fanatical, GMG, and more
+- **Supabase** — verdict cache (7-day TTL)
+- **Upstash Redis** — pricing cache (1-hour TTL) and rate limiting
+
+## Local setup
 
 ```bash
+# Install dependencies
+npm install
+
+# Copy and fill in env vars
+cp .env.example .env.local
+# Edit .env.local with your API keys (see below)
+
+# Start dev server
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+> If you don't have real API keys, the app falls back to hardcoded mock verdicts for `elden-ring`, `cyberpunk-2077`, and `portal-2` in development.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Environment variables
 
-## Learn More
+| Variable                               | Required | Source                                                                                   |
+| -------------------------------------- | -------- | ---------------------------------------------------------------------------------------- |
+| `RAWG_API_KEY`                         | Yes      | [rawg.io/apidocs](https://rawg.io/apidocs)                                               |
+| `GEMINI_API_KEY`                       | Yes      | [aistudio.google.com](https://aistudio.google.com/app/apikey)                            |
+| `NEXT_PUBLIC_SUPABASE_URL`             | Yes      | Supabase project settings                                                                |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Yes      | Supabase project settings                                                                |
+| `SUPABASE_SECRET_KEY`                  | Yes      | Supabase project settings                                                                |
+| `UPSTASH_REDIS_REST_URL`               | Yes      | [console.upstash.com](https://console.upstash.com)                                       |
+| `UPSTASH_REDIS_REST_TOKEN`             | Yes      | [console.upstash.com](https://console.upstash.com)                                       |
+| `ITAD_API_KEY`                         | Yes      | [isthereanydeal.com/dev](https://isthereanydeal.com/dev/)                                |
+| `GROQ_API_KEY`                         | No       | [console.groq.com](https://console.groq.com/keys) — auto-used when Gemini quota runs out |
 
-To learn more about Next.js, take a look at the following resources:
+## Database
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+The app expects a `verdicts` table in Supabase. Run this once in the SQL editor:
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```sql
+create table if not exists verdicts (
+  id uuid primary key default gen_random_uuid(),
+  game_slug text unique not null,
+  game_name text not null,
+  verdict text not null,
+  reasons text[] not null,
+  metacritic_score int,
+  user_rating numeric,
+  current_price numeric,
+  historical_low numeric,
+  currency text default 'USD',
+  ai_model text,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+```
 
-## Deploy on Vercel
+## Key commands
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+```bash
+npm run dev              # start dev server
+npm test                 # run all unit tests
+npm run test:security    # security / input-validation tests only
+npm run db:clear-cache   # wipe all cached verdicts and pricing
+npm run db:prewarm       # pre-warm top 100 games into cache
+```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## License
+
+MIT
