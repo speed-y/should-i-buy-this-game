@@ -41,6 +41,16 @@ function priceCacheKey(title: string): string {
   return `price:itad:${title.toLowerCase().replace(/\s+/g, '-')}`
 }
 
+function isDynamicServerError(err: unknown): boolean {
+  if (err instanceof Error) {
+    return (
+      err.message.includes('Dynamic server usage') ||
+      (err as { digest?: string }).digest === 'DYNAMIC_SERVER_USAGE'
+    )
+  }
+  return false
+}
+
 // ── ITAD types ─────────────────────────────────────────────────────────────────
 
 interface ItadSearchResult {
@@ -136,6 +146,9 @@ export async function getGamePrice(title: string): Promise<PriceData | null> {
       return cached
     }
   } catch (e) {
+    if (isDynamicServerError(e)) {
+      throw e
+    }
     console.warn('[ITAD] Redis cache read failed:', e)
   }
 
@@ -201,6 +214,9 @@ export async function getGamePrice(title: string): Promise<PriceData | null> {
         `all-time low: $${historicalLow}, ${storePrices.length} stores`
     )
   } catch (e) {
+    if (isDynamicServerError(e)) {
+      throw e
+    }
     console.warn('[ITAD] Redis cache write failed:', e)
   }
 
