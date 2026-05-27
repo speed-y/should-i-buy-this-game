@@ -5,13 +5,8 @@ import { GameData, PriceData, VerdictResult } from '../types'
 
 const ai = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY })
 
-// Tried in order — moves to next on quota exhaustion
-const GEMINI_MODELS = [
-  'gemini-flash-latest',
-  'gemini-3.5-flash',
-  'gemini-2.5-flash',
-  'gemini-3.1-flash-lite',
-] as const
+// Tried in order — moves to next on any error
+const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-flash-latest'] as const
 
 const verdictSchema = z.object({
   verdict: z.enum(['buy', 'wait', 'skip']),
@@ -89,6 +84,23 @@ export interface WebEnrichment {
   sentiment: string | null
 }
 
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`Timeout after ${ms}ms`))
+    }, ms)
+    promise
+      .then((val) => {
+        clearTimeout(timer)
+        resolve(val)
+      })
+      .catch((err: unknown) => {
+        clearTimeout(timer)
+        reject(err instanceof Error ? err : new Error(String(err)))
+      })
+  })
+}
+
 // Single Google Search grounding call that extracts both the Metacritic score and community sentiment.
 // Called before verdict generation so missing scores can be backfilled and sentiment can inform the AI.
 export async function fetchWebEnrichment(
@@ -97,7 +109,7 @@ export async function fetchWebEnrichment(
 ): Promise<WebEnrichment> {
   const yearHint = released ? ` (${released.slice(0, 4)})` : ''
   try {
-    const res = await ai.models.generateContent({
+    const apiCall = ai.models.generateContent({
       model: 'gemini-flash-latest',
       contents: `Look up the video game "${gameName}"${yearHint} and respond in exactly this format:
 
@@ -107,6 +119,8 @@ SENTIMENT: [3-4 sentences covering critic reception, community sentiment, notabl
         tools: [{ googleSearch: {} }],
       },
     })
+
+    const res = await withTimeout(apiCall, 3500)
 
     const text = res.text?.trim() ?? ''
 
@@ -129,7 +143,7 @@ SENTIMENT: [3-4 sentences covering critic reception, community sentiment, notabl
 
     return { metacriticScore, sentiment }
   } catch (e) {
-    console.warn('[AI] Web enrichment fetch failed, proceeding without it:', e)
+    console.warn('[AI] Web enrichment fetch failed or timed out, proceeding without it:', e)
     return { metacriticScore: null, sentiment: null }
   }
 }
@@ -146,30 +160,26 @@ function parseAndValidate(raw: string, gameName: string): VerdictResult {
   return { gameName, verdict: validated.verdict, reasons: validated.reasons }
 }
 
-function isQuotaError(e: unknown): boolean {
-  if (!(e instanceof Error)) return false
-  const msg = e.message
-  return (
-    msg.includes('RESOURCE_EXHAUSTED') ||
-    msg.includes('quota') ||
-    msg.includes('rate_limit_exceeded') ||
-    msg.includes('429')
-  )
-}
-
 async function callGeminiModel(
   model: string,
   game: GameData,
   price: PriceData | null,
   sentiment: string | null
 ): Promise<VerdictResult> {
+  const config: NonNullable<Parameters<typeof ai.models.generateContent>[0]['config']> = {
+    responseMimeType: 'application/json',
+  }
+
+  // Only add thinkingConfig for newer models that support it (2.0+)
+  // gemini-flash-latest (1.5) does not support thinkingLevel
+  if (model.startsWith('gemini-2.') || model.startsWith('gemini-3.')) {
+    config.thinkingConfig = { thinkingLevel: ThinkingLevel.LOW }
+  }
+
   const response = await ai.models.generateContent({
     model,
     contents: buildPrompt(game, price, sentiment),
-    config: {
-      thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-      responseMimeType: 'application/json',
-    },
+    config,
   })
   const text = response.text
   if (!text) throw new Error(`${model} returned an empty response`)
@@ -186,12 +196,9 @@ async function callGeminiWithFallbacks(
     try {
       return await callGeminiModel(model, game, price, sentiment)
     } catch (e) {
-      if (isQuotaError(e)) {
-        console.warn(`[AI] ${model} quota hit, trying next model`)
-        lastError = e
-        continue
-      }
-      throw e
+      console.warn(`[AI] ${model} failed, trying next model:`, e)
+      lastError = e
+      continue
     }
   }
   throw lastError
@@ -237,8 +244,8 @@ export async function getVerdictFromAI(
   try {
     return await callGeminiWithFallbacks(game, price, sentiment)
   } catch (e) {
-    if (isQuotaError(e) && env.GROQ_API_KEY) {
-      console.warn('[AI] All Gemini models exhausted, falling back to Groq')
+    if (env.GROQ_API_KEY) {
+      console.warn('[AI] Gemini models exhausted or failed, falling back to Groq:', e)
       try {
         return await callGroq(game, price, sentiment)
       } catch (groqError) {

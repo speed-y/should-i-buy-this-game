@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { cache } from 'react'
 import { Metadata } from 'next'
 import { notFound } from 'next/navigation'
 import { fetchVerdict } from '@/lib/verdict'
@@ -6,16 +6,14 @@ import VerdictCard from '@/components/VerdictCard'
 import PriceSnapshot from '@/components/PriceSnapshot'
 import SearchBar from '@/components/SearchBar'
 
-export const revalidate = 86400 // 24 hours ISR
+const getVerdict = cache(async (slug: string) => {
+  return fetchVerdict(slug)
+})
+
+export const dynamic = 'force-dynamic'
 
 type Props = {
   params: Promise<{ slug: string }>
-}
-
-// Pre-render nothing initially or we can pre-render key games.
-// generateStaticParams will return an empty list here so pages are generated on-demand and cached via ISR.
-export function generateStaticParams(): { slug: string }[] {
-  return []
 }
 
 // Generate highly optimized SEO metadata dynamically
@@ -23,7 +21,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { slug } = await params
 
   try {
-    const result = await fetchVerdict(slug)
+    const result = await getVerdict(slug)
     const title = `Should I Buy ${result.gameName}? AI Game Purchase Verdict`
     const description = `Read our AI-powered buying guide for ${result.gameName}. Current verdict is "${result.verdict.toUpperCase()}" with reasons, real-time pricing analysis, and discounts.`
 
@@ -49,7 +47,7 @@ export default async function GameVerdictPage({ params }: Props): Promise<React.
 
   let result
   try {
-    result = await fetchVerdict(slug)
+    result = await getVerdict(slug)
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : ''
     if (errorMessage === 'Game not found') {
