@@ -21,7 +21,18 @@ const PRICE_CACHE_TTL = 60 * 60 // 1 hour in seconds
 let _redis: Redis | null = null
 function getRedis(): Redis {
   if (!_redis) {
-    _redis = new Redis({ url: env.UPSTASH_REDIS_REST_URL, token: env.UPSTASH_REDIS_REST_TOKEN })
+    // @ts-expect-error - 'fetch' property is supported at runtime but missing from specific Node.js type definitions
+    _redis = new Redis({
+      url: env.UPSTASH_REDIS_REST_URL,
+      token: env.UPSTASH_REDIS_REST_TOKEN,
+      fetch: (input: RequestInfo | URL, init?: RequestInit) => {
+        const cleanInit = init ? { ...init } : {}
+        if (cleanInit.cache === 'no-store') {
+          delete cleanInit.cache
+        }
+        return fetch(input, cleanInit)
+      },
+    })
   }
   return _redis
 }
