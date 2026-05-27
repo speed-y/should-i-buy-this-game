@@ -21,13 +21,34 @@ const PRICE_CACHE_TTL = 60 * 60 // 1 hour in seconds
 let _redis: Redis | null = null
 function getRedis(): Redis {
   if (!_redis) {
-    _redis = new Redis({ url: env.UPSTASH_REDIS_REST_URL, token: env.UPSTASH_REDIS_REST_TOKEN })
+    // @ts-expect-error - 'fetch' property is supported at runtime but missing from specific Node.js type definitions
+    _redis = new Redis({
+      url: env.UPSTASH_REDIS_REST_URL,
+      token: env.UPSTASH_REDIS_REST_TOKEN,
+      fetch: (input: RequestInfo | URL, init?: RequestInit) => {
+        const cleanInit = init ? { ...init } : {}
+        if (cleanInit.cache === 'no-store') {
+          delete cleanInit.cache
+        }
+        return fetch(input, cleanInit)
+      },
+    })
   }
   return _redis
 }
 
 function priceCacheKey(title: string): string {
   return `price:itad:${title.toLowerCase().replace(/\s+/g, '-')}`
+}
+
+function isDynamicServerError(err: unknown): boolean {
+  if (err instanceof Error) {
+    return (
+      err.message.includes('Dynamic server usage') ||
+      (err as { digest?: string }).digest === 'DYNAMIC_SERVER_USAGE'
+    )
+  }
+  return false
 }
 
 // ── ITAD types ─────────────────────────────────────────────────────────────────
@@ -125,6 +146,9 @@ export async function getGamePrice(title: string): Promise<PriceData | null> {
       return cached
     }
   } catch (e) {
+    if (isDynamicServerError(e)) {
+      throw e
+    }
     console.warn('[ITAD] Redis cache read failed:', e)
   }
 
@@ -190,6 +214,9 @@ export async function getGamePrice(title: string): Promise<PriceData | null> {
         `all-time low: $${historicalLow}, ${storePrices.length} stores`
     )
   } catch (e) {
+    if (isDynamicServerError(e)) {
+      throw e
+    }
     console.warn('[ITAD] Redis cache write failed:', e)
   }
 

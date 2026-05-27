@@ -96,12 +96,21 @@ describe('getVerdictFromAI', () => {
     )
   })
 
-  it('does not retry other models on non-quota errors', async () => {
-    generateMock.mockRejectedValueOnce(new Error('Invalid API key'))
-    await expect(getVerdictFromAI(game, price)).rejects.toThrow(
-      'AI verdict generation failed or returned invalid format'
-    )
-    expect(generateMock).toHaveBeenCalledTimes(1)
+  it('retries other models and falls back on non-quota errors', async () => {
+    generateMock.mockRejectedValue(new Error('Invalid API key'))
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        choices: [
+          { message: { content: JSON.stringify({ verdict: 'wait', reasons: ['X', 'Y', 'Z'] }) } },
+        ],
+      }),
+    })
+
+    const result = await getVerdictFromAI(game, price)
+    expect(result.verdict).toBe('wait')
+    expect(generateMock).toHaveBeenCalledTimes(3)
+    expect(mockFetch).toHaveBeenCalledTimes(1)
   })
 })
 
